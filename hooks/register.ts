@@ -14,6 +14,8 @@ type Pending = { instructions?: string; resume?: string }
 let autoAt: number | undefined
 let warnedBand = -1
 let pending: Pending | undefined
+// The job whose /compact is queued or running; its resume note goes out once the compaction lands.
+let inFlight: Pending | undefined
 
 const k = (n: number) => `${Math.round(n / 1000)}k`
 
@@ -41,7 +43,7 @@ function describe(f: Fill) {
 }
 
 function status($: Dollar, f: Fill) {
-  $.ui.status(f.pct === undefined ? undefined : `ctx ${f.pct}%${pending ? ' · compact queued' : ''}`)
+  $.ui.status(f.pct === undefined ? undefined : `ctx ${f.pct}%${inFlight ? ' · compacting' : pending ? ' · compact queued' : ''}`)
 }
 
 function bandOf(pct: number | undefined) {
@@ -74,26 +76,21 @@ function resumeText(job: Pending) {
     : 'The conversation was compacted at your request. Continue where you left off.'
 }
 
-async function finish($: Dollar, job: Pending) {
-  pending = undefined
-  warnedBand = -1
-  await refreshAutoAt($)
-  try { status($, await fill($)) } catch {}
-  trace($, 'compacted; resuming')
-  await $.prompt.submit({ text: resumeText(job) })
-}
-
 // $.session.compact() rejects with "a turn is running" from a turn.complete hook and its timers
 // (measured 2026-10-20 in the desktop app), so queue /compact instead: the engine runs a
-// queued command once the session is idle, and the resume prompt queues behind it.
+// queued command once the session is idle. command.run resolves when the command is queued, not
+// when it has run (2026-10-20: a resume sent then arrived a minute before the compaction), so the
+// resume note goes out from the session.compact hook instead.
 async function runCompaction($: Dollar, job: Pending): Promise<void> {
   if (pending !== job) return
+  // Claim it before awaiting: another turn.complete in the meantime must not queue it again.
+  pending = undefined
+  inFlight = job
   try {
     trace($, 'queueing /compact for when the session is idle')
     await $.command.run({ command: 'compact', args: job.instructions ?? '' })
-    await finish($, job)
   } catch (err) {
-    pending = undefined
+    if (inFlight === job) inFlight = undefined
     trace($, `could not compact: ${String(err).slice(0, 200)}`)
   }
 }
@@ -198,6 +195,14 @@ export const register: Register = on => {
     if (e.trigger !== 'precompute' && e.agentId === undefined && done.skip === undefined) {
       warnedBand = -1
       await refreshAutoAt($)
+      const job = inFlight
+      if (job) {
+        inFlight = undefined
+        try { status($, await fill($)) } catch {}
+        trace($, `compacted (${e.trigger}); resuming`)
+        // After the hook returns, so the prompt queues behind the finished compaction.
+        $.clock.after(0, () => void $.prompt.submit({ text: resumeText(job) }).catch(err => trace($, `resume not sent: ${String(err).slice(0, 200)}`)))
+      }
     }
     return done
   }).catch(($, e, next) => next(e))
