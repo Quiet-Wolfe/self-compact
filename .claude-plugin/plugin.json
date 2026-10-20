@@ -1,0 +1,1 @@
+{ "name": "self-compact", "version": "0.1.0", "author": { "name": "Quiet-Wolfe" }, "description": "Lets Claude compact its own conversation at a breakpoint it picks, with context-fill warnings so it knows when." }

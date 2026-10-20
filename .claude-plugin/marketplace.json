@@ -1,0 +1,5 @@
+{
+  "name": "self-compact",
+  "owner": { "name": "Quiet-Wolfe" },
+  "plugins": [{ "name": "self-compact", "source": "./" }]
+}
